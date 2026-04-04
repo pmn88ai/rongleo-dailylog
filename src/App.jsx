@@ -1,4 +1,4 @@
-// DailyJournal v3 — patched: focus fix, settings, supabase re-init, clean people, editor upgrade
+// DailyJournal v4 — patched: supabase blocking fix, test-conn fix, multi-AI provider (Groq/OpenAI/Anthropic)
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 /* ══════════════════════════════════════════════════════════════
@@ -32,7 +32,15 @@ const MOOD_LIST = [
   { v:"confused", e:"😵", l:"Rối"    },
 ];
 const MOOD_MAP = Object.fromEntries(MOOD_LIST.map(m => [m.v, m.e]));
-const DEFAULT_CONFIG = { sbUrl: "", sbKey: "", aiKey: "", aiEnabled: true };
+// ── [PATCH V4] Expanded config — multi-AI provider ──────────
+const DEFAULT_CONFIG = {
+  sbUrl:       "",
+  sbKey:       "",
+  aiProvider:  "anthropic",   // "anthropic" | "openai" | "groq"
+  aiKey:       "",
+  aiModel:     "",            // blank = use provider default
+  aiEnabled:   true,
+};
 
 /* ══════════════════════════════════════════════════════════════
    HELPERS (outside component)
@@ -282,6 +290,7 @@ select.finp{cursor:pointer}
 .sync-dot{width:6px;height:6px;border-radius:50%;background:var(--grn);display:inline-block;margin-right:4px}
 .sync-dot.off{background:var(--tx3)}
 .sync-dot.sync{background:var(--yel);animation:pulse .8s infinite}
+.sync-dot.connecting{background:var(--blu);animation:pulse .6s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .cfm-ovl{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)}
 .cfm-box{background:var(--sur);border-radius:var(--r-lg);padding:24px 20px 20px;width:100%;max-width:300px;box-shadow:var(--sh-lg);text-align:center}
@@ -685,52 +694,106 @@ function ConfirmModal({ data, onClose }) {
   );
 }
 
-function SettingsView({ config, onSave }) {
-  const [url,     setUrl]     = useState(config.sbUrl  || "");
-  const [key,     setKey]     = useState(config.sbKey  || "");
-  const [aiKey,   setAiKey]   = useState(config.aiKey  || "");
-  const [aiOn,    setAiOn]    = useState(config.aiEnabled !== false);
-  const [conn,    setConn]    = useState(null);
-  const [testing, setTesting] = useState(false);
+// ── [PATCH V4] SettingsView — fixed testConn + multi-AI provider ──
+const AI_PROVIDERS = [
+  { v:"anthropic", l:"Anthropic (Claude)", placeholder:"sk-ant-api03-…", defaultModel:"claude-sonnet-4-20250514" },
+  { v:"openai",    l:"OpenAI (GPT)",        placeholder:"sk-…",           defaultModel:"gpt-4o-mini"              },
+  { v:"groq",      l:"Groq (Llama / fast)", placeholder:"gsk_…",          defaultModel:"llama3-70b-8192"          },
+];
 
+function SettingsView({ config, onSave }) {
+  const [url,      setUrl]      = useState(config.sbUrl      || "");
+  const [key,      setKey]      = useState(config.sbKey      || "");
+  const [aiProv,   setAiProv]   = useState(config.aiProvider || "anthropic");
+  const [aiKey,    setAiKey]    = useState(config.aiKey      || "");
+  const [aiModel,  setAiModel]  = useState(config.aiModel    || "");
+  const [aiOn,     setAiOn]     = useState(config.aiEnabled  !== false);
+  const [conn,     setConn]     = useState(null); // null | "ok" | "fail" | "testing"
+  const [connMsg,  setConnMsg]  = useState("");
+
+  const provInfo = AI_PROVIDERS.find(p => p.v === aiProv) || AI_PROVIDERS[0];
+
+  // [PATCH V3] testConn — dùng auth.getSession() thay select()
+  // select() yêu cầu table tồn tại và RLS pass; getSession() chỉ cần network + key hợp lệ
   const testConn = async () => {
-    if (!url || !key) { setConn("fail"); return; }
-    setTesting(true); setConn(null);
+    if (!url || !key) { setConn("fail"); setConnMsg("URL và Key không được trống"); return; }
+    setConn("testing"); setConnMsg("Đang kiểm tra…");
     try {
-      if (!window.supabase) throw new Error();
+      if (!window.supabase) throw new Error("Supabase SDK chưa load. Thêm script vào index.html.");
+      console.log("[DailyLog] Supabase testConn URL:", url);
       const sb = window.supabase.createClient(url, key);
-      const { error } = await sb.from("daily_logs").select("id").limit(1);
-      setConn(error ? "fail" : "ok");
-    } catch { setConn("fail"); }
-    setTesting(false);
+      // Dùng REST ping thay vì query table — không phụ thuộc RLS hay schema
+      const res = await fetch(`${url}/rest/v1/`, {
+        headers: { apikey: key, Authorization: `Bearer ${key}` }
+      });
+      console.log("[DailyLog] testConn HTTP status:", res.status);
+      if (res.ok || res.status === 200 || res.status === 404) {
+        // 404 = endpoint không có nhưng server trả lời → kết nối được
+        setConn("ok"); setConnMsg(`HTTP ${res.status} — server phản hồi`);
+      } else {
+        setConn("fail"); setConnMsg(`HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error("[DailyLog] testConn error:", e);
+      setConn("fail"); setConnMsg(String(e.message || e));
+    }
+  };
+
+  const handleSave = () => {
+    const cfg = { sbUrl:url, sbKey:key, aiProvider:aiProv, aiKey, aiModel, aiEnabled:aiOn };
+    onSave(cfg);
+  };
+
+  const handleReset = () => {
+    setUrl(""); setKey(""); setAiProv("anthropic"); setAiKey(""); setAiModel(""); setAiOn(true); setConn(null); setConnMsg("");
+    onSave(DEFAULT_CONFIG);
   };
 
   return (
     <div>
       <div className="view-title">⚙️ Cài đặt</div>
 
+      {/* ── Supabase ── */}
       <div className="set-sec">
         <div className="set-sec-ttl">🗄️ Supabase</div>
         <div className="fgrp">
           <div className="flbl">Project URL</div>
-          <input className="finp" placeholder="https://xxxx.supabase.co" value={url} onChange={e => setUrl(e.target.value)} />
+          <input className="finp" placeholder="https://xxxx.supabase.co"
+            value={url} onChange={e => setUrl(e.target.value.trim())} />
         </div>
         <div className="fgrp">
           <div className="flbl">Anon Key</div>
-          <input className="finp" placeholder="eyJhbGci…" type="password" value={key} onChange={e => setKey(e.target.value)} />
+          <input className="finp" placeholder="eyJhbGci…" type="password"
+            value={key} onChange={e => setKey(e.target.value.trim())} />
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" }}>
-          <button className="conn-test" onClick={testConn} disabled={testing}>{testing ? "Testing…" : "🔌 Test kết nối"}</button>
-          {conn === "ok"   && <span className="conn-badge conn-ok">✅ Kết nối OK</span>}
-          {conn === "fail" && <span className="conn-badge conn-fail">❌ Thất bại</span>}
+          <button className="conn-test" onClick={testConn} disabled={conn === "testing"}>
+            {conn === "testing" ? "⏳ Testing…" : "🔌 Test kết nối"}
+          </button>
+          {conn === "ok"      && <span className="conn-badge conn-ok">✅ OK — {connMsg}</span>}
+          {conn === "fail"    && <span className="conn-badge conn-fail">❌ Lỗi — {connMsg}</span>}
+          {conn === "testing" && <span className="conn-badge" style={{color:"var(--blu)"}}>⏳ {connMsg}</span>}
         </div>
       </div>
 
+      {/* ── AI Provider ── */}
       <div className="set-sec">
-        <div className="set-sec-ttl">✨ AI (Anthropic)</div>
+        <div className="set-sec-ttl">✨ AI Provider</div>
         <div className="fgrp">
-          <div className="flbl">API Key (optional — dùng built-in nếu trống)</div>
-          <input className="finp" placeholder="sk-ant-…" type="password" value={aiKey} onChange={e => setAiKey(e.target.value)} />
+          <div className="flbl">Provider</div>
+          <select className="finp" value={aiProv} onChange={e => { setAiProv(e.target.value); setAiModel(""); }}>
+            {AI_PROVIDERS.map(p => <option key={p.v} value={p.v}>{p.l}</option>)}
+          </select>
+        </div>
+        <div className="fgrp">
+          <div className="flbl">API Key</div>
+          <input className="finp" placeholder={provInfo.placeholder} type="password"
+            value={aiKey} onChange={e => setAiKey(e.target.value.trim())} />
+        </div>
+        <div className="fgrp">
+          <div className="flbl">Model (để trống = dùng mặc định: <code style={{fontSize:11}}>{provInfo.defaultModel}</code>)</div>
+          <input className="finp" placeholder={provInfo.defaultModel}
+            value={aiModel} onChange={e => setAiModel(e.target.value.trim())} />
         </div>
         <div className="toggle-row">
           <span className="toggle-lbl">Bật AI tóm tắt</span>
@@ -741,23 +804,19 @@ function SettingsView({ config, onSave }) {
         </div>
       </div>
 
+      {/* ── Actions ── */}
       <div className="set-sec">
         <div className="set-sec-ttl">⚡ Thao tác</div>
         <div style={{ display:"flex",gap:10 }}>
-          <button className="btn btn-pri" style={{ flex:1,padding:"11px" }}
-            onClick={() => onSave({ sbUrl:url, sbKey:key, aiKey, aiEnabled:aiOn })}>
-            💾 Lưu cài đặt
-          </button>
-          <button className="btn btn-sec" style={{ flex:1,padding:"11px" }}
-            onClick={() => { setUrl(""); setKey(""); setAiKey(""); setAiOn(true); setConn(null); onSave(DEFAULT_CONFIG); }}>
-            🗑 Reset
-          </button>
+          <button className="btn btn-pri" style={{ flex:1,padding:"11px" }} onClick={handleSave}>💾 Lưu cài đặt</button>
+          <button className="btn btn-sec" style={{ flex:1,padding:"11px" }} onClick={handleReset}>🗑 Reset</button>
         </div>
       </div>
 
-      <div style={{ fontSize:11,color:"var(--tx3)",lineHeight:1.8,padding:"0 2px" }}>
-        Config lưu trong <code style={{background:"var(--bg2)",padding:"1px 5px",borderRadius:4}}>localStorage["app_config"]</code>.<br/>
-        Supabase key không gửi lên server — chỉ dùng từ browser.<br/>
+      <div style={{ fontSize:11,color:"var(--tx3)",lineHeight:1.9,padding:"0 2px" }}>
+        Config: <code style={{background:"var(--bg2)",padding:"1px 5px",borderRadius:4}}>localStorage["app_config"]</code><br/>
+        Supabase SDK cần script trong <code>index.html</code>:<br/>
+        <code style={{fontSize:10,wordBreak:"break-all"}}>{"<script src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2\"></script>"}</code><br/>
         SQL schema: xem comment cuối file.
       </div>
     </div>
@@ -772,10 +831,19 @@ export default function DailyJournal() {
   // ── config ──────────────────────────────────────────────────
   const [config, setConfig] = useState(DEFAULT_CONFIG);
 
+  // [PATCH V3] saveConfig — force reconnect ngay sau khi save
   const saveConfig = useCallback((newCfg) => {
-    setConfig(newCfg);
-    lsSet(LS_CONFIG, newCfg);
-  }, []);
+    const merged = { ...DEFAULT_CONFIG, ...newCfg };
+    setConfig(merged);
+    lsSet(LS_CONFIG, merged);
+    // Reset singleton → buộc tạo lại client với creds mới
+    _sbClient = null;
+    _sbCreds  = { url: "", key: "" };
+    console.log("[DailyLog] Config saved. SB URL:", merged.sbUrl, "| AI:", merged.aiProvider);
+    if (merged.sbUrl && merged.sbKey) {
+      setTimeout(() => loadEntries(merged.sbUrl, merged.sbKey), 0);
+    }
+  }, []); // eslint-disable-line
 
   // [FIX] Supabase re-init when config.sbUrl / config.sbKey changes
   useEffect(() => {
@@ -834,54 +902,78 @@ export default function DailyJournal() {
   }, []);
 
   // ── db ────────────────────────────────────────────────────────
+  // [PATCH V3] loadEntries — setSyncStatus chính xác, không override bằng offline sai
   const loadEntries = async (url, key) => {
     setLoadPct(30);
+    setSyncStatus("connecting");
+    console.log("[DailyLog] loadEntries — URL:", url);
     const sb = getSupabase(url, key);
+    console.log("[DailyLog] Supabase client:", sb ? "OK" : "null");
     if (sb) {
-      setSyncStatus("syncing");
       try {
         const { data, error } = await sb
           .from("daily_logs").select("*")
           .eq("id_user", USER_ID).eq("id_app", APP_ID)
           .order("date", { ascending: false });
+        console.log("[DailyLog] loadEntries result — error:", error, "| rows:", data?.length);
         if (!error && data) {
           setEntries(data); lsSet(LS_ENTRIES, data);
           setSyncStatus("online"); setLoadPct(100);
           setTimeout(() => setLoadPct(0), 500);
           return;
         }
-      } catch {}
+        // error từ Supabase (RLS, schema…) nhưng vẫn có kết nối
+        console.warn("[DailyLog] loadEntries Supabase error:", error?.message);
+        setSyncStatus("offline");
+      } catch (e) {
+        console.error("[DailyLog] loadEntries exception:", e);
+        setSyncStatus("offline");
+      }
+    } else {
+      setSyncStatus("offline");
     }
-    setSyncStatus("offline"); setLoadPct(100);
+    setLoadPct(100);
     setTimeout(() => setLoadPct(0), 500);
   };
 
+  // [PATCH V3] dbInsert — XÓA điều kiện syncStatus === "online"
+  // Luôn thử Supabase nếu có client; nếu fail → trả về local payload
   const dbInsert = async (payload) => {
     const sb = getSupabase(config.sbUrl, config.sbKey);
-    if (sb && syncStatus === "online") {
+    if (sb) {
       try {
+        console.log("[DailyLog] dbInsert →", payload.title);
         const { data, error } = await sb.from("daily_logs").insert([payload]).select().single();
-        if (!error && data) return data;
-      } catch {}
+        if (!error && data) { console.log("[DailyLog] dbInsert OK, id:", data.id); return data; }
+        console.warn("[DailyLog] dbInsert error:", error?.message);
+      } catch (e) { console.error("[DailyLog] dbInsert exception:", e); }
     }
-    return payload;
+    return payload; // fallback: lưu local
   };
 
+  // [PATCH V3] dbUpdate — XÓA điều kiện syncStatus === "online"
   const dbUpdate = async (id, changes) => {
     const sb = getSupabase(config.sbUrl, config.sbKey);
-    if (sb && syncStatus === "online") {
+    if (sb) {
       try {
-        await sb.from("daily_logs")
+        console.log("[DailyLog] dbUpdate id:", id);
+        const { error } = await sb.from("daily_logs")
           .update({ ...changes, updated_at: new Date().toISOString() })
           .eq("id", id).eq("id_user", USER_ID).eq("id_app", APP_ID);
-      } catch {}
+        if (error) console.warn("[DailyLog] dbUpdate error:", error?.message);
+      } catch (e) { console.error("[DailyLog] dbUpdate exception:", e); }
     }
   };
 
+  // [PATCH V3] dbDelete — XÓA điều kiện syncStatus === "online"
   const dbDelete = async (id) => {
     const sb = getSupabase(config.sbUrl, config.sbKey);
-    if (sb && syncStatus === "online") {
-      try { await sb.from("daily_logs").delete().eq("id", id).eq("id_user", USER_ID).eq("id_app", APP_ID); } catch {}
+    if (sb) {
+      try {
+        const { error } = await sb.from("daily_logs")
+          .delete().eq("id", id).eq("id_user", USER_ID).eq("id_app", APP_ID);
+        if (error) console.warn("[DailyLog] dbDelete error:", error?.message);
+      } catch (e) { console.error("[DailyLog] dbDelete exception:", e); }
     }
   };
 
@@ -1072,31 +1164,107 @@ export default function DailyJournal() {
     }, 40);
   }, [entries, openAdd]);
 
+  // [PATCH V4] summarizeEntry — multi-provider AI call
   const summarizeEntry = useCallback(async (entry) => {
     if (!entry.content?.trim()) { showToast("Chưa có nội dung"); return; }
-    if (!config.aiEnabled) { showToast("AI bị tắt trong Cài đặt"); return; }
+    if (!config.aiEnabled)      { showToast("AI bị tắt trong Cài đặt"); return; }
+
     setAiLoading(true);
+
+    const prompt = `Tóm tắt nhật ký ngày ${fmtDate(entry.date)} thành ý chính. JSON only, không markdown:\n{"points":["ý 1","ý 2"],"highlight":"1 câu tổng quan"}\n\nNhật ký:\n${entry.content}`;
+    const provider  = config.aiProvider  || "anthropic";
+    const userModel = config.aiModel?.trim();
+    const apiKey    = config.aiKey?.trim();
+
+    console.log("[DailyLog] AI call — provider:", provider, "| model:", userModel || "(default)");
+
     try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role:"user", content:
-            `Tóm tắt nhật ký ngày ${fmtDate(entry.date)} thành ý chính. JSON only, không markdown:\n{"points":["ý 1"],"highlight":"1 câu tổng quan"}\n\nNhật ký:\n${entry.content}`
-          }]
-        })
-      });
-      const data   = await resp.json();
-      const raw    = data.content?.find(b => b.type === "text")?.text || "{}";
-      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+      let raw = "{}";
+
+      // ── Groq ──────────────────────────────────────────────────
+      if (provider === "groq") {
+        if (!apiKey) { showToast("Chưa có Groq API key trong Cài đặt"); setAiLoading(false); return; }
+        const model = userModel || "llama3-70b-8192";
+        const resp  = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: "You are a Vietnamese journal summarizer. Always respond with valid JSON only." },
+              { role: "user",   content: prompt }
+            ],
+            temperature: 0.3,
+          })
+        });
+        if (!resp.ok) {
+          const err = await resp.text();
+          console.error("[DailyLog] Groq error:", resp.status, err);
+          throw new Error(`Groq HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        raw = data.choices?.[0]?.message?.content || "{}";
+      }
+
+      // ── OpenAI ────────────────────────────────────────────────
+      else if (provider === "openai") {
+        if (!apiKey) { showToast("Chưa có OpenAI API key trong Cài đặt"); setAiLoading(false); return; }
+        const model = userModel || "gpt-4o-mini";
+        const resp  = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: "You are a Vietnamese journal summarizer. Always respond with valid JSON only." },
+              { role: "user",   content: prompt }
+            ],
+            temperature: 0.3,
+          })
+        });
+        if (!resp.ok) {
+          const err = await resp.text();
+          console.error("[DailyLog] OpenAI error:", resp.status, err);
+          throw new Error(`OpenAI HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        raw = data.choices?.[0]?.message?.content || "{}";
+      }
+
+      // ── Anthropic (default / built-in) ────────────────────────
+      else {
+        const model   = userModel || "claude-sonnet-4-20250514";
+        const headers = { "Content-Type": "application/json" };
+        if (apiKey) headers["x-api-key"] = apiKey; // nếu có key riêng
+        const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model, max_tokens: 1000,
+            messages: [{ role: "user", content: prompt }]
+          })
+        });
+        if (!resp.ok) {
+          const err = await resp.text();
+          console.error("[DailyLog] Anthropic error:", resp.status, err);
+          throw new Error(`Anthropic HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        raw = data.content?.find(b => b.type === "text")?.text || "{}";
+      }
+
+      const parsed  = JSON.parse(raw.replace(/```json|```/g, "").trim());
       const updated = entries.map(e => e.id === entry.id ? { ...e, _summary: parsed } : e);
       setEntries(updated);
       setDetailEntry(d => d?.id === entry.id ? { ...d, _summary: parsed } : d);
       showToast("✨ AI tóm tắt xong");
-    } catch { showToast("❌ Lỗi AI"); }
+    } catch (e) {
+      console.error("[DailyLog] summarizeEntry failed:", e);
+      showToast(`❌ AI lỗi: ${e.message || "unknown"}`);
+    }
+
     setAiLoading(false);
-  }, [config.aiEnabled, entries, showToast]);
+  }, [config.aiEnabled, config.aiProvider, config.aiKey, config.aiModel, entries, showToast]);
 
   const handlePersonClick = useCallback((p) => {
     setPersonFilter({ id: p.contact_id, name: p.name });
@@ -1186,8 +1354,8 @@ export default function DailyJournal() {
           <div className="hdr-logo">🐉 Daily<span>Log</span></div>
           <div className="hdr-actions">
             <span style={{ fontSize:11,color:"var(--tx3)",display:"flex",alignItems:"center" }}>
-              <span className={`sync-dot${syncStatus==="offline"?" off":syncStatus==="syncing"?" sync":""}`}/>
-              {syncStatus}
+              <span className={`sync-dot${syncStatus==="offline"?" off":syncStatus==="connecting"?" connecting":syncStatus==="syncing"?" sync":""}`}/>
+              {syncStatus === "connecting" ? "connecting…" : syncStatus}
             </span>
             <button className="icon-btn" onClick={toggleTheme}>{theme==="light"?"🌙":"☀️"}</button>
             <button className="icon-btn" onClick={exportData}>📤</button>
@@ -1345,7 +1513,7 @@ export default function DailyJournal() {
 
           {/* SETTINGS */}
           <div className={`view${activeTab==="settings"?" active":""}`}>
-            <SettingsView config={config} onSave={(cfg) => { saveConfig(cfg); showToast("✅ Đã lưu cài đặt"); }} />
+            <SettingsView config={config} onSave={(cfg) => { saveConfig(cfg); showToast("✅ Đã lưu — đang kết nối…"); }} />
           </div>
         </div>
 
@@ -1439,4 +1607,12 @@ create index if not exists idx_dl_date     on daily_logs (date);
 
 alter table daily_logs enable row level security;
 create policy "RongLeo" on daily_logs for all using (id_user = 'RongLeo');
+
+-- Test query sau khi setup:
+-- select count(*) from daily_logs where id_user = 'RongLeo' and id_app = 'daily_log';
+
+══════════════════════════════════════════════════════════════
+SUPABASE SDK — thêm vào index.html <head>:
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+══════════════════════════════════════════════════════════════
 */
