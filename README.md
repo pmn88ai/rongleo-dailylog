@@ -1,16 +1,146 @@
-# React + Vite
+# 📓 Daily Journal App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## 🚀 Mục tiêu
 
-Currently, two official plugins are available:
+App ghi nhật ký công việc:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+* calendar tuần / tháng
+* theo dõi công việc
+* lưu Supabase
+* dùng đa thiết bị
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 🧱 Công nghệ
 
-## Expanding the ESLint configuration
+* React (Vite)
+* Supabase
+* LocalStorage fallback
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+---
+
+## ⚙️ Setup Local
+
+### 1. Tạo project
+
+```bash
+npm create vite@latest daily-journal
+cd daily-journal
+npm install
+```
+
+---
+
+### 2. Replace code
+
+* Mở `src/App.jsx`
+* Dán file JSX của bạn
+
+---
+
+### 3. Cài Supabase CDN (nếu cần)
+
+Trong `index.html`:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+```
+
+---
+
+### 4. Chạy app
+
+```bash
+npm run dev
+```
+
+---
+
+## ⚙️ Cấu hình trong app
+
+Mở app → vào ⚙️ Settings:
+
+### Supabase
+
+* URL: từ project Supabase
+* anon key: từ project Supabase
+
+### AI (optional)
+
+* API key (Claude/OpenAI)
+* bật/tắt AI
+
+---
+
+## 🗄️ Database
+
+Chạy SQL trong Supabase:
+
+* bảng: `daily_logs`
+
+---
+
+## 🔄 Sync
+
+* data lưu trên Supabase
+* fallback localStorage nếu offline
+
+---
+
+## 📤 Export
+
+* tải JSON toàn bộ dữ liệu
+
+---
+
+## 📥 Import
+
+* import JSON
+* validate trước khi ghi
+
+---
+
+## 🚀 Deploy Vercel
+
+### 1. Push code lên GitHub
+
+```bash
+git init
+git add .
+git commit -m "init"
+git branch -M main
+git remote add origin <repo>
+git push -u origin main
+```
+
+---
+
+### 2. Deploy
+
+* vào https://vercel.com
+* import repo
+* chọn project
+
+👉 Vercel auto detect Vite
+
+---
+
+### 3. Xong
+
+Mở link → vào Settings → nhập config
+
+---
+
+## 🧠 Ghi chú
+
+* Không lưu key trong code
+* Config nằm trong UI
+* 1 user: RongLeo
+
+---
+
+## 🐉 Goal
+
+App này là:
+
+👉 “bộ nhớ công việc cá nhân có thể truy vấn”
