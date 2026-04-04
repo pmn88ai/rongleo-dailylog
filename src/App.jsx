@@ -1,6 +1,6 @@
 // DailyJournal v4 — patched: supabase blocking fix, test-conn fix, multi-AI provider (Groq/OpenAI/Anthropic)
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-
+import { createClient } from "@supabase/supabase-js"
 /* ══════════════════════════════════════════════════════════════
    CONSTANTS (stable, outside component → no re-creation)
 ═══════════════════════════════════════════════════════════════ */
@@ -65,13 +65,19 @@ let _sbCreds  = { url: "", key: "" };
 
 function getSupabase(url, key) {
   if (!url || !key) return null;
-  if (_sbClient && _sbCreds.url === url && _sbCreds.key === key) return _sbClient;
-  try {
-    if (!window.supabase) return null;
-    _sbClient = window.supabase.createClient(url, key);
-    _sbCreds  = { url, key };
+
+  if (_sbClient && _sbCreds.url === url && _sbCreds.key === key) {
     return _sbClient;
-  } catch { return null; }
+  }
+
+  try {
+    _sbClient = createClient(url, key);
+    _sbCreds = { url, key };
+    return _sbClient;
+  } catch (e) {
+    console.error("[DailyLog] createClient error:", e);
+    return null;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -719,13 +725,19 @@ function SettingsView({ config, onSave }) {
     if (!url || !key) { setConn("fail"); setConnMsg("URL và Key không được trống"); return; }
     setConn("testing"); setConnMsg("Đang kiểm tra…");
     try {
-      if (!window.supabase) throw new Error("Supabase SDK chưa load. Thêm script vào index.html.");
-      console.log("[DailyLog] Supabase testConn URL:", url);
-      const sb = window.supabase.createClient(url, key);
-      // Dùng REST ping thay vì query table — không phụ thuộc RLS hay schema
+     console.log("[DailyLog] Supabase testConn URL:", url);
+
+      // tạo client bằng import (KHÔNG dùng window)
+      const sb = createClient(url, key);
+
+      // ping REST API để test kết nối
       const res = await fetch(`${url}/rest/v1/`, {
-        headers: { apikey: key, Authorization: `Bearer ${key}` }
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`
+        }
       });
+
       console.log("[DailyLog] testConn HTTP status:", res.status);
       if (res.ok || res.status === 200 || res.status === 404) {
         // 404 = endpoint không có nhưng server trả lời → kết nối được
@@ -1611,8 +1623,6 @@ create policy "RongLeo" on daily_logs for all using (id_user = 'RongLeo');
 -- Test query sau khi setup:
 -- select count(*) from daily_logs where id_user = 'RongLeo' and id_app = 'daily_log';
 
-══════════════════════════════════════════════════════════════
-SUPABASE SDK — thêm vào index.html <head>:
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 ══════════════════════════════════════════════════════════════
 */
