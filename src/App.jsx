@@ -34,8 +34,8 @@ const MOOD_LIST = [
 const MOOD_MAP = Object.fromEntries(MOOD_LIST.map(m => [m.v, m.e]));
 // ── [PATCH V4] Expanded config — multi-AI provider ──────────
 const DEFAULT_CONFIG = {
-  sbUrl:       "",
-  sbKey:       "",
+  sbUrl:       "https://ejxummgrpimhvzrwatjr.supabase.co",
+  sbKey:       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqeHVtbWdycGltaHZ6cndhdGpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5MjgxMzcsImV4cCI6MjA5MDUwNDEzN30.uqDtqlTVfTlzYNkqj5HoPuXBgrbIBxcvbUuEFCYTWCE",
   aiProvider:  "anthropic",   // "anthropic" | "openai" | "groq"
   aiKey:       "",
   aiModel:     "",            // blank = use provider default
@@ -903,15 +903,22 @@ export default function DailyJournal() {
   const [formLinks,    setFormLinks]    = useState([]);
 
   // ── init ─────────────────────────────────────────────────────
-  useEffect(() => {
-    const saved = lsGet(LS_CONFIG);
-    if (saved) setConfig({ ...DEFAULT_CONFIG, ...saved });
-    const th = localStorage.getItem("dl_theme") || "light";
-    setTheme(th);
-    document.documentElement.setAttribute("data-theme", th);
-    const cached = lsGet(LS_ENTRIES) || [];
-    setEntries(cached);
-  }, []);
+ useEffect(() => {
+     const saved = lsGet(LS_CONFIG);
+   
+     if (saved) {
+       setConfig({ ...DEFAULT_CONFIG, ...saved });
+     } else {
+       setConfig(DEFAULT_CONFIG); // 🔥 THÊM DÒNG NÀY
+     }
+   
+     const th = localStorage.getItem("dl_theme") || "light";
+     setTheme(th);
+     document.documentElement.setAttribute("data-theme", th);
+   
+     const cached = lsGet(LS_ENTRIES) || [];
+     setEntries(cached);
+   }, []);
 
   // ── db ────────────────────────────────────────────────────────
   // [PATCH V3] loadEntries — setSyncStatus chính xác, không override bằng offline sai
