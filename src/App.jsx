@@ -731,8 +731,8 @@ function SettingsView({ config, onSave }) {
       const sb = createClient(url, key);
 
       // ping REST API để test kết nối
-      const res = await fetch(`${url}/rest/v1/`, {
-        headers: {
+      const res = await fetch(`${url}/rest/v1/daily_logs?select=id&limit=1`, {
+          headers: {
           apikey: key,
           Authorization: `Bearer ${key}`
         }
