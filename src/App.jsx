@@ -962,7 +962,7 @@ export default function DailyJournal() {
     if (sb) {
       try {
         console.log("[DailyLog] dbInsert →", payload.title);
-        const { data, error } = await sb.from("daily_logs").insert([payload]).select().single();
+        const { data, error } = await sb.from("daily_logs").insert([{...payload, id_user: USER_ID, id_app: APP_ID}]).select().single();
         if (!error && data) { console.log("[DailyLog] dbInsert OK, id:", data.id); return data; }
         console.warn("[DailyLog] dbInsert error:", error?.message);
       } catch (e) { console.error("[DailyLog] dbInsert exception:", e); }
