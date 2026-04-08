@@ -957,18 +957,36 @@ export default function DailyJournal() {
 
   // [PATCH V3] dbInsert — XÓA điều kiện syncStatus === "online"
   // Luôn thử Supabase nếu có client; nếu fail → trả về local payload
-  const dbInsert = async (payload) => {
-    const sb = getSupabase(config.sbUrl, config.sbKey);
-    if (sb) {
-      try {
-        console.log("[DailyLog] dbInsert →", payload.title);
-        const { data, error } = await sb.from("daily_logs").insert([{...payload, id_user: USER_ID, id_app: APP_ID}]).select().single();
-        if (!error && data) { console.log("[DailyLog] dbInsert OK, id:", data.id); return data; }
-        console.warn("[DailyLog] dbInsert error:", error?.message);
-      } catch (e) { console.error("[DailyLog] dbInsert exception:", e); }
-    }
-    return payload; // fallback: lưu local
-  };
+    const dbInsert = async (payload) => {
+     const sb = getSupabase(config.sbUrl, config.sbKey);
+   
+     if (!sb) {
+       console.error("❌ No Supabase client");
+       return null;
+     }
+   
+     try {
+       console.log("[INSERT] sending:", payload);
+   
+       const { data, error } = await sb
+         .from("daily_logs")
+         .insert([payload])
+         .select()
+         .single();
+   
+       if (error) {
+         console.error("❌ INSERT ERROR:", error);
+         return null;
+       }
+   
+       console.log("✅ INSERT OK:", data);
+       return data;
+   
+     } catch (e) {
+       console.error("❌ INSERT EXCEPTION:", e);
+       return null;
+     }
+   };
 
   // [PATCH V3] dbUpdate — XÓA điều kiện syncStatus === "online"
   const dbUpdate = async (id, changes) => {
@@ -1136,9 +1154,14 @@ export default function DailyJournal() {
       status: formStatus, mood: formMood,
     };
     if (formMode === "add") {
-      payload.id = uuid(); payload.created_at = new Date().toISOString();
+      payload.created_at = new Date().toISOString();
       const saved = await dbInsert(payload);
+        if (!saved) {
+        showToast("❌ Lưu thất bại (mở console xem lỗi)");
+        return;
+      }      
       const updated = [saved, ...entries];
+      console.log("👉 Saved result:", saved);
       setEntries(updated); lsSet(LS_ENTRIES, updated);
       showToast("✅ Đã thêm");
     } else {
